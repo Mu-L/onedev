@@ -35,7 +35,6 @@ public class SystemSetting implements Serializable, Validatable {
 	
 	private int memory;
 	
-	@SuppressWarnings("restriction")
 	public SystemSetting() {
 		cpu = Runtime.getRuntime().availableProcessors()*1000;
 		

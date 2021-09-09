@@ -28,7 +28,8 @@ public class CommandStep extends Step {
 	
 	private boolean useTTY;
 	
-	@Editable(order=100, description="Specify docker image to execute commands inside")
+	@Editable(order=100, description="Specify docker image to execute commands inside. "
+			+ "<span class='text-warning'>This property will be ignored if the job is executed by a shell/batch executor</span>")
 	@Interpolative(variableSuggester="suggestVariables")
 	@NotEmpty
 	public String getImage() {

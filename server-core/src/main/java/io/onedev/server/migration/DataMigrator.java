@@ -2771,7 +2771,6 @@ public class DataMigrator {
 		}
 	}
 	
-	@SuppressWarnings("restriction")
 	private void migrate62(File dataDir, Stack<Integer> versions) {
 		for (File file: dataDir.listFiles()) {
 			if (file.getName().startsWith("Settings.xml")) {

@@ -26,7 +26,7 @@ import static io.onedev.k8shelper.KubernetesHelper.*;
 
 public class VariableInterpolator {
 
-	public static final String HELP = "<b>NOTE: </b> Type <tt>@</tt> to <a href='$docRoot/pages/variable-substitution.md' target='_blank' tabindex='-1'>insert variable</a>. "
+	public static final String HELP = "<b>Tips: </b> Type <tt>@</tt> to <a href='$docRoot/pages/variable-substitution.md' target='_blank' tabindex='-1'>insert variable</a>. "
 			+ "Use <tt>@@</tt> for literal <tt>@</tt>";
 	
 	public static final String PREFIX_PARAM = "param:"; 

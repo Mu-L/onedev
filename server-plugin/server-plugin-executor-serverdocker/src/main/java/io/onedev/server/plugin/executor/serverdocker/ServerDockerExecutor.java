@@ -1,8 +1,14 @@
 package io.onedev.server.plugin.executor.serverdocker;
 
-import static io.onedev.k8shelper.KubernetesHelper.*;
-
-import static java.nio.charset.StandardCharsets.UTF_8;
+import static io.onedev.k8shelper.KubernetesHelper.addOriginRemote;
+import static io.onedev.k8shelper.KubernetesHelper.cloneRepository;
+import static io.onedev.k8shelper.KubernetesHelper.getCacheInstances;
+import static io.onedev.k8shelper.KubernetesHelper.installGitCert;
+import static io.onedev.k8shelper.KubernetesHelper.preprocess;
+import static io.onedev.k8shelper.KubernetesHelper.readPlaceholderValues;
+import static io.onedev.k8shelper.KubernetesHelper.replacePlaceholders;
+import static io.onedev.k8shelper.KubernetesHelper.stringifyPosition;
+import static io.onedev.k8shelper.KubernetesHelper.updateSubmodulesIfNecessary;
 
 import java.io.File;
 import java.io.IOException;
@@ -11,6 +17,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -29,12 +36,10 @@ import org.slf4j.LoggerFactory;
 
 import com.google.common.base.Joiner;
 import com.google.common.base.Preconditions;
-import com.google.common.base.Splitter;
-import com.google.common.base.Throwables;
 
 import io.onedev.agent.DockerUtils;
-import io.onedev.commons.loader.AppLoader;
 import io.onedev.commons.bootstrap.Bootstrap;
+import io.onedev.commons.loader.AppLoader;
 import io.onedev.commons.utils.ExplicitException;
 import io.onedev.commons.utils.FileUtils;
 import io.onedev.commons.utils.PathUtils;
@@ -62,9 +67,6 @@ import io.onedev.server.job.resource.ResourceManager;
 import io.onedev.server.model.support.RegistryLogin;
 import io.onedev.server.model.support.administration.jobexecutor.JobExecutor;
 import io.onedev.server.plugin.executor.serverdocker.ServerDockerExecutor.TestData;
-import io.onedev.server.util.ExceptionUtils;
-import io.onedev.server.util.PKCS12CertExtractor;
-import io.onedev.server.util.ServerConfig;
 import io.onedev.server.util.patternset.PatternSet;
 import io.onedev.server.util.validation.Validatable;
 import io.onedev.server.util.validation.annotation.ClassValidating;
@@ -160,29 +162,6 @@ public class ServerDockerExecutor extends JobExecutor implements Testable<TestDa
 			}
 			
 		};
-	}
-	
-	protected List<String> getTrustCertContent() {
-		List<String> trustCertContent = new ArrayList<>();
-		ServerConfig serverConfig = OneDev.getInstance(ServerConfig.class); 
-		File keystoreFile = serverConfig.getKeystoreFile();
-		if (keystoreFile != null) {
-			String password = serverConfig.getKeystorePassword();
-			for (Map.Entry<String, String> entry: new PKCS12CertExtractor(keystoreFile, password).extact().entrySet()) 
-				trustCertContent.addAll(Splitter.on('\n').trimResults().splitToList(entry.getValue()));
-		}
-		if (serverConfig.getTrustCertsDir() != null) {
-			for (File file: serverConfig.getTrustCertsDir().listFiles()) {
-				if (file.isFile()) {
-					try {
-						trustCertContent.addAll(FileUtils.readLines(file, UTF_8));
-					} catch (IOException e) {
-						throw new RuntimeException(e);
-					}
-				}
-			}
-		}
-		return trustCertContent;
 	}
 	
 	@Override
@@ -494,13 +473,6 @@ public class ServerDockerExecutor extends JobExecutor implements Testable<TestDa
 		return false;
 	}
 	
-	private String getErrorMessage(Exception exception) {
-		String errorMessage = ExceptionUtils.getExpectedError(exception);
-		if (errorMessage == null) 
-			errorMessage = Throwables.getStackTraceAsString(exception);
-		return errorMessage;
-	}
-	
 	@Override
 	public boolean isValid(ConstraintValidatorContext context) {
 		boolean isValid = true;
@@ -573,85 +545,93 @@ public class ServerDockerExecutor extends JobExecutor implements Testable<TestDa
 	
 	@Override
 	public void test(TestData testData, TaskLogger jobLogger) {
-		login(jobLogger);
-		
-		jobLogger.log("Running container...");
-		File workspaceDir = null;
-		File cacheDir = null;
+		OneDev.getInstance(ResourceManager.class).run(new Runnable() {
 
-		Commandline docker = newDocker();
-		try {
-			workspaceDir = FileUtils.createTempDir("workspace");
-			cacheDir = new File(getCacheHome(), UUID.randomUUID().toString());
-			FileUtils.createDir(cacheDir);
-			
-			jobLogger.log("Test running specified docker image...");
-			docker.clearArgs();
-			docker.addArgs("run", "--rm");
-			if (getRunOptions() != null)
-				docker.addArgs(StringUtils.parseQuoteTokens(getRunOptions()));
-			String containerWorkspacePath;
-			String containerCachePath;
-			if (SystemUtils.IS_OS_WINDOWS) {
-				containerWorkspacePath = "C:\\onedev-build\\workspace";
-				containerCachePath = "C:\\onedev-build\\cache";
-			} else {
-				containerWorkspacePath = "/onedev-build/workspace";
-				containerCachePath = "/onedev-build/cache";
+			@Override
+			public void run() {
+				login(jobLogger);
+				
+				jobLogger.log("Running container...");
+				File workspaceDir = null;
+				File cacheDir = null;
+
+				Commandline docker = newDocker();
+				try {
+					workspaceDir = FileUtils.createTempDir("workspace");
+					cacheDir = new File(getCacheHome(), UUID.randomUUID().toString());
+					FileUtils.createDir(cacheDir);
+					
+					jobLogger.log("Test running specified docker image...");
+					docker.clearArgs();
+					docker.addArgs("run", "--rm");
+					if (getRunOptions() != null)
+						docker.addArgs(StringUtils.parseQuoteTokens(getRunOptions()));
+					String containerWorkspacePath;
+					String containerCachePath;
+					if (SystemUtils.IS_OS_WINDOWS) {
+						containerWorkspacePath = "C:\\onedev-build\\workspace";
+						containerCachePath = "C:\\onedev-build\\cache";
+					} else {
+						containerWorkspacePath = "/onedev-build/workspace";
+						containerCachePath = "/onedev-build/cache";
+					}
+					docker.addArgs("-v", getOuterPath(workspaceDir.getAbsolutePath()) + ":" + containerWorkspacePath);
+					docker.addArgs("-v", getOuterPath(cacheDir.getAbsolutePath()) + ":" + containerCachePath);
+					
+					docker.addArgs("-w", containerWorkspacePath);
+					docker.addArgs(testData.getDockerImage());
+					
+					if (SystemUtils.IS_OS_WINDOWS) 
+						docker.addArgs("cmd", "/c", "echo hello from container");
+					else 
+						docker.addArgs("sh", "-c", "echo hello from container");
+					
+					docker.execute(new LineConsumer() {
+
+						@Override
+						public void consume(String line) {
+							jobLogger.log(line);
+						}
+						
+					}, new LineConsumer() {
+
+						@Override
+						public void consume(String line) {
+							jobLogger.log(line);
+						}
+						
+					}).checkReturnCode();
+				} finally {
+					if (workspaceDir != null)
+						FileUtils.deleteDir(workspaceDir);
+					if (cacheDir != null)
+						FileUtils.deleteDir(cacheDir);
+				}
+				
+				if (!SystemUtils.IS_OS_WINDOWS) {
+					jobLogger.log("Test running busybox...");
+					docker = newDocker();
+					docker.addArgs("run", "--rm", "busybox", "sh", "-c", "echo hello from busybox");			
+					docker.execute(new LineConsumer() {
+
+						@Override
+						public void consume(String line) {
+							jobLogger.log(line);
+						}
+						
+					}, new LineConsumer() {
+
+						@Override
+						public void consume(String line) {
+							jobLogger.log(line);
+						}
+						
+					}).checkReturnCode();
+				}
 			}
-			docker.addArgs("-v", getOuterPath(workspaceDir.getAbsolutePath()) + ":" + containerWorkspacePath);
-			docker.addArgs("-v", getOuterPath(cacheDir.getAbsolutePath()) + ":" + containerCachePath);
 			
-			docker.addArgs("-w", containerWorkspacePath);
-			docker.addArgs(testData.getDockerImage());
-			
-			if (SystemUtils.IS_OS_WINDOWS) 
-				docker.addArgs("cmd", "/c", "echo hello from container");
-			else 
-				docker.addArgs("sh", "-c", "echo hello from container");
-			
-			docker.execute(new LineConsumer() {
-
-				@Override
-				public void consume(String line) {
-					jobLogger.log(line);
-				}
-				
-			}, new LineConsumer() {
-
-				@Override
-				public void consume(String line) {
-					jobLogger.log(line);
-				}
-				
-			}).checkReturnCode();
-		} finally {
-			if (workspaceDir != null)
-				FileUtils.deleteDir(workspaceDir);
-			if (cacheDir != null)
-				FileUtils.deleteDir(cacheDir);
-		}
+		}, new HashMap<>(), jobLogger);
 		
-		if (!SystemUtils.IS_OS_WINDOWS) {
-			jobLogger.log("Test running busybox...");
-			docker = newDocker();
-			docker.addArgs("run", "--rm", "busybox", "sh", "-c", "echo hello from busybox");			
-			docker.execute(new LineConsumer() {
-
-				@Override
-				public void consume(String line) {
-					jobLogger.log(line);
-				}
-				
-			}, new LineConsumer() {
-
-				@Override
-				public void consume(String line) {
-					jobLogger.log(line);
-				}
-				
-			}).checkReturnCode();
-		}
 	}
 	
 	@Editable(name="Specify a Docker Image to Test Against")
